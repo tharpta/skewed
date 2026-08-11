@@ -1,10 +1,9 @@
 import {
-  nearestPressureLevel,
-  windComponents,
   type SoundingLevel,
   type SoundingProfile,
   type SoundingProvider,
 } from "../sounding";
+import { deriveSoundingIndices } from "../meteorology";
 
 export const PRESSURE_LEVELS = [
   1000, 975, 950, 925, 900, 875, 850, 825, 800, 775, 750, 725, 700,
@@ -35,20 +34,6 @@ const pressureVariables = PRESSURE_LEVELS.flatMap((pressure) => [
 function value(hourly: HourlyPayload, key: string, index: number) {
   const candidate = hourly[key]?.[index];
   return typeof candidate === "number" ? candidate : Number.NaN;
-}
-
-function bulkShearKt(levels: SoundingLevel[], depthM: number) {
-  const surface = levels.at(0);
-  if (!surface) return Number.NaN;
-  const top = levels.reduce((closest, level) =>
-    Math.abs(level.heightM - surface.heightM - depthM) <
-    Math.abs(closest.heightM - surface.heightM - depthM)
-      ? level
-      : closest,
-  );
-  const lowerWind = windComponents(surface.windDirectionDeg, surface.windSpeedKt);
-  const upperWind = windComponents(top.windDirectionDeg, top.windSpeedKt);
-  return Math.hypot(upperWind.uKt - lowerWind.uKt, upperWind.vKt - lowerWind.vKt);
 }
 
 export const openMeteoHrrrProvider: SoundingProvider = {
@@ -90,10 +75,12 @@ export const openMeteoHrrrProvider: SoundingProvider = {
       return Object.values(level).every(Number.isFinite) ? level : null;
     }).filter((level): level is SoundingLevel => level !== null);
     if (levels.length < 5) throw new Error("Forecast profile is incomplete");
-    const surface = nearestPressureLevel(levels, 1000) ?? levels[0];
-    const surfaceT = value(payload.hourly, "temperature_2m", index);
-    const surfaceTd = value(payload.hourly, "dew_point_2m", index);
     const validTimeIso = `${payload.hourly.time[index]}:00Z`;
+    const indices = deriveSoundingIndices(
+      levels,
+      value(payload.hourly, "cape", index),
+      value(payload.hourly, "convective_inhibition", index),
+    );
     return {
       id: `hrrr-${payload.latitude}-${payload.longitude}-${validTimeIso}`,
       source: "forecast",
@@ -109,17 +96,7 @@ export const openMeteoHrrrProvider: SoundingProvider = {
         elevationM: payload.elevation,
       },
       levels,
-      indices: {
-        sbcapeJkg: value(payload.hourly, "cape", index),
-        mlcapeJkg: Number.NaN,
-        cinJkg: value(payload.hourly, "convective_inhibition", index),
-        lclM: Math.max(0, 125 * (surfaceT - surfaceTd)),
-        shear01Kt: bulkShearKt(levels, 1000),
-        shear06Kt: bulkShearKt(levels, 6000),
-        srh01M2s2: Number.NaN,
-        srh03M2s2: Number.NaN,
-        fixedStp: Number.NaN,
-      },
+      indices,
     };
   },
 };
