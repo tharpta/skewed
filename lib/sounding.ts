@@ -46,6 +46,7 @@ export interface SoundingProvider {
     longitude: number;
     validTimeIso: string;
     model?: string;
+    signal?: AbortSignal;
   }): Promise<SoundingProfile>;
 }
 

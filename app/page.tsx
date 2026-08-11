@@ -6,7 +6,7 @@ import type { SoundingLevel, SoundingProfile } from "../lib/sounding";
 import { bunkersRightMover, surfaceParcelProfile } from "../lib/meteorology";
 import { MapPicker } from "./MapPicker";
 import { placeLabel, searchPlaces, type Place } from "../lib/locations";
-import { cacheProfile, cachedProfile } from "../lib/profile-cache";
+import { cacheProfile, cachedProfile, clearSkewedStorage } from "../lib/profile-cache";
 import { getObservedProfile } from "../lib/providers/observed";
 
 const models = ["HRRR", "OBS"];
@@ -73,7 +73,7 @@ function SoundingChart({ hour, parcel, levels, comparison }: { hour: number; par
     };
     draw(); const obs=new ResizeObserver(draw); obs.observe(canvas); return()=>obs.disconnect();
   },[hour,parcel,levels,comparison]);
-  return <canvas ref={ref} aria-label="Skew-T log-P sounding chart" />;
+  return <canvas ref={ref} aria-label="Skew-T log-P sounding chart" aria-describedby="profile-summary" />;
 }
 
 function Hodograph({levels}:{levels?:SoundingLevel[]}){
@@ -89,30 +89,33 @@ export default function Home() {
   const [place,setPlace]=useState<Place>({name:"Wichita",admin:"Kansas",latitude:37.687,longitude:-97.330});
   const [mapOpen,setMapOpen]=useState(false); const [suggestions,setSuggestions]=useState<Place[]>([]);
   const [placesOpen,setPlacesOpen]=useState(false);
-  const [recents,setRecents]=useState<Place[]>(()=>storedPlaces("skewed:recents"));
-  const [favorites,setFavorites]=useState<Place[]>(()=>storedPlaces("skewed:favorites"));
+  const [recents,setRecents]=useState<Place[]>([]);
+  const [favorites,setFavorites]=useState<Place[]>([]);
   const [profile,setProfile]=useState<SoundingProfile>(); const [dataState,setDataState]=useState<"loading"|"live"|"cached"|"error">("loading");
   const [refreshKey,setRefreshKey]=useState(0);
   const [compare,setCompare]=useState(false); const [comparison,setComparison]=useState<SoundingProfile>();
-  const [online,setOnline]=useState(()=>typeof navigator==="undefined"?true:navigator.onLine);
-  const [fieldMode,setFieldMode]=useState(()=>typeof window!=="undefined"&&localStorage.getItem("skewed:field-mode")==="true");
+  const [online,setOnline]=useState(true);
+  const [fieldMode,setFieldMode]=useState(false); const [preferencesLoaded,setPreferencesLoaded]=useState(false);
   const favorite=favorites.some(item=>Math.abs(item.latitude-place.latitude)<.001&&Math.abs(item.longitude-place.longitude)<.001);
+  useEffect(()=>{const id=setTimeout(()=>{setRecents(storedPlaces("skewed:recents"));setFavorites(storedPlaces("skewed:favorites"));setFieldMode(localStorage.getItem("skewed:field-mode")==="true");setPreferencesLoaded(true)},0);return()=>clearTimeout(id)},[]);
   const searchSequence=useRef(0);
   useEffect(()=>{const sequence=++searchSequence.current;const id=setTimeout(()=>searchPlaces(location).then(results=>{if(sequence===searchSequence.current)setSuggestions(results)}).catch(()=>{if(sequence===searchSequence.current)setSuggestions([])}),350);return()=>clearTimeout(id)},[location]);
   const choosePlace=useCallback((next:Place)=>{setDataState("loading");setPlace(next);setLocation(placeLabel(next));setSuggestions([]);setRecents(previous=>{const updated=[next,...previous.filter(item=>Math.abs(item.latitude-next.latitude)>.001||Math.abs(item.longitude-next.longitude)>.001)].slice(0,5);localStorage.setItem("skewed:recents",JSON.stringify(updated));return updated})},[]);
   const toggleFavorite=()=>{setFavorites(previous=>{const exists=previous.some(item=>Math.abs(item.latitude-place.latitude)<.001&&Math.abs(item.longitude-place.longitude)<.001);const updated=exists?previous.filter(item=>Math.abs(item.latitude-place.latitude)>.001||Math.abs(item.longitude-place.longitude)>.001):[place,...previous];localStorage.setItem("skewed:favorites",JSON.stringify(updated));return updated})};
   useEffect(()=>{const connected=()=>setOnline(true),disconnected=()=>setOnline(false);window.addEventListener("online",connected);window.addEventListener("offline",disconnected);return()=>{window.removeEventListener("online",connected);window.removeEventListener("offline",disconnected)}},[]);
-  useEffect(()=>{localStorage.setItem("skewed:field-mode",String(fieldMode));if(!fieldMode)return;let lock:{release:()=>Promise<void>}|undefined;const wakeLock=(navigator as Navigator&{wakeLock?:{request:(type:"screen")=>Promise<{release:()=>Promise<void>}>}}).wakeLock;wakeLock?.request("screen").then(value=>{lock=value}).catch(()=>{});return()=>{lock?.release().catch(()=>{})}},[fieldMode]);
+  const focusReturn=useRef<HTMLElement|null>(null);
+  useEffect(()=>{if(!mapOpen&&!placesOpen)return;focusReturn.current=document.activeElement as HTMLElement;const dialog=document.querySelector<HTMLElement>("[role=dialog]");setTimeout(()=>dialog?.focus(),0);const keydown=(event:KeyboardEvent)=>{if(event.key==="Escape"){setMapOpen(false);setPlacesOpen(false)}if(event.key==="Tab"&&dialog){const items=[...dialog.querySelectorAll<HTMLElement>('button,input,[tabindex]:not([tabindex="-1"])')].filter(item=>!item.hasAttribute("disabled"));if(!items.length)return;const first=items[0],last=items.at(-1)!;if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}}};document.addEventListener("keydown",keydown);return()=>{document.removeEventListener("keydown",keydown);focusReturn.current?.focus()}},[mapOpen,placesOpen]);
+  useEffect(()=>{if(!preferencesLoaded)return;localStorage.setItem("skewed:field-mode",String(fieldMode));if(!fieldMode)return;let lock:{release:()=>Promise<void>}|undefined;const wakeLock=(navigator as Navigator&{wakeLock?:{request:(type:"screen")=>Promise<{release:()=>Promise<void>}>}}).wakeLock;wakeLock?.request("screen").then(value=>{lock=value}).catch(()=>{});return()=>{lock?.release().catch(()=>{})}},[fieldMode,preferencesLoaded]);
   useEffect(()=>{
-    let current=true;
+    let current=true;const controller=new AbortController();
     const valid=new Date(); valid.setUTCMinutes(0,0,0); valid.setUTCHours(valid.getUTCHours()+time);
-    const request=model==="OBS"?getObservedProfile(place.latitude,place.longitude):openMeteoHrrrProvider.getProfile({latitude:place.latitude,longitude:place.longitude,validTimeIso:valid.toISOString(),model});
+    const request=model==="OBS"?getObservedProfile(place.latitude,place.longitude,controller.signal):openMeteoHrrrProvider.getProfile({latitude:place.latitude,longitude:place.longitude,validTimeIso:valid.toISOString(),model,signal:controller.signal});
     request
-      .then(next=>{if(current){next.location.name=placeLabel(place);cacheProfile(next);setProfile(next);setDataState("live")}})
-      .catch(()=>{if(current){const fallback=cachedProfile(place.latitude,place.longitude);if(fallback){setProfile(fallback);setDataState("cached")}else setDataState("error")}});
-    return()=>{current=false};
+      .then(next=>{if(current){next.location.name=placeLabel(place);cacheProfile(next,place.latitude,place.longitude);setProfile(next);setDataState("live")}})
+      .catch(()=>{if(current){const fallback=cachedProfile(place.latitude,place.longitude,model);if(fallback){setProfile(fallback);setDataState("cached")}else setDataState("error")}});
+    return()=>{current=false;controller.abort()};
   },[time,model,place,refreshKey]);
-  useEffect(()=>{if(!compare||model==="OBS"){return}let current=true;const valid=new Date();valid.setUTCMinutes(0,0,0);valid.setUTCHours(valid.getUTCHours()+time+3);openMeteoHrrrProvider.getProfile({latitude:place.latitude,longitude:place.longitude,validTimeIso:valid.toISOString(),model}).then(next=>{if(current)setComparison(next)}).catch(()=>{if(current)setComparison(undefined)});return()=>{current=false}},[compare,time,model,place,refreshKey]);
+  useEffect(()=>{if(!compare||model==="OBS"){return}let current=true;const controller=new AbortController();const valid=new Date();valid.setUTCMinutes(0,0,0);valid.setUTCHours(valid.getUTCHours()+time+3);openMeteoHrrrProvider.getProfile({latitude:place.latitude,longitude:place.longitude,validTimeIso:valid.toISOString(),model,signal:controller.signal}).then(next=>{if(current)setComparison(next)}).catch(()=>{if(current)setComparison(undefined)});return()=>{current=false;controller.abort()}},[compare,time,model,place,refreshKey]);
   const display=(value:number|undefined,digits=0)=>Number.isFinite(value)?Number(value).toFixed(digits):"—";
   const riskScore=profile?.indices.fixedStp??0;
   const riskLabel=riskScore>=3?"Significant":riskScore>=1?"Elevated":riskScore>=.25?"Conditional":"Limited";
@@ -126,7 +129,7 @@ export default function Home() {
     <section className="toolbar glass">
       <div className="location"><span>⌖</span><input aria-label="Location search" value={location} onChange={e=>setLocation(e.target.value)} onFocus={()=>setSuggestions(recents)}/><small>{Math.abs(place.latitude).toFixed(3)}° {place.latitude>=0?"N":"S"} · {Math.abs(place.longitude).toFixed(3)}° {place.longitude>=0?"E":"W"}</small>{suggestions.length>0&&<div className="suggestions">{suggestions.map((item,index)=><button key={`${item.latitude}-${item.longitude}-${index}`} onClick={()=>choosePlace(item)}><b>{item.name}</b><span>{[item.admin,item.country].filter(Boolean).join(" · ")}</span></button>)}</div>}</div>
       <div className="divider"/>
-      <div className="model"><span className="model-label">MODEL</span><div className="segmented">{models.map(m=><button className={model===m?"active":""} onClick={()=>{setDataState("loading");setModel(m)}} key={m}>{m}</button>)}</div></div>
+      <div className="model"><span className="model-label">MODEL</span><div className="segmented">{models.map(m=><button className={model===m?"active":""} onClick={()=>{setDataState("loading");setModel(m);if(m==="OBS"){setTime(0);setCompare(false);setComparison(undefined)}}} key={m}>{m}</button>)}</div></div>
       <button className="map-button" onClick={()=>setMapOpen(true)}>◉ <span>MAP</span></button><button className="refresh" onClick={()=>{setDataState("loading");setTime(0);setRefreshKey(key=>key+1)}}>↻ <span>UPDATE</span></button>
     </section>
 
@@ -145,9 +148,9 @@ export default function Home() {
       </aside>
 
       <section className="plot glass">
-        <div className="plot-head"><div><span>SKEW-T · LOG-P</span><b>{model} {model==="OBS"?"LATEST RELEASE":"LATEST RUN"} <i>•</i> {profile?.source==="forecast"?`F${String(profile.forecastHour).padStart(2,"0")}`:"RAOB"}</b></div><div className="plot-tools"><button disabled={model==="OBS"} onClick={()=>setCompare(value=>!value)} className={compare&&model!=="OBS"?"selected compare":""}>⇄ <span>COMPARE</span></button><button onClick={()=>setParcel(!parcel)} className={parcel?"selected":""}>◒ <span>PARCEL</span></button><button onClick={()=>setLayers(!layers)}>▤ <span>PANEL</span></button><button>↗</button></div></div>
-        <div className="legend"><span className="red"/> Temperature <span className="green"/> Dew point {parcel&&<><span className="yellow"/> Parcel</>} {compare&&comparison&&<b className="compare-key">DASHED · +3H</b>}</div>
-        <div className="chart"><SoundingChart hour={time} parcel={parcel} levels={profile?.levels} comparison={compare?comparison?.levels:undefined}/><div className="cape-label">CAPE<br/><b>{display(profile?.indices.sbcapeJkg)}</b></div>{compare&&comparison&&<div className="compare-card"><span>+3H COMPARISON</span><b>{new Date(comparison.validTimeIso).getUTCHours().toString().padStart(2,"0")}Z</b><div><small>CAPE</small><strong>{display(comparison.indices.sbcapeJkg)}</strong><em>{display(comparison.indices.sbcapeJkg-(profile?.indices.sbcapeJkg??0))}</em></div><div><small>SHEAR</small><strong>{display(comparison.indices.shear06Kt)} kt</strong><em>{display(comparison.indices.shear06Kt-(profile?.indices.shear06Kt??0))}</em></div><div><small>STP</small><strong>{display(comparison.indices.fixedStp,1)}</strong><em>{display(comparison.indices.fixedStp-(profile?.indices.fixedStp??0),1)}</em></div></div>}</div>
+        <div className="plot-head"><div><span>SKEW-T · LOG-P</span><b>{model} {model==="OBS"?"LATEST RELEASE":"LATEST RUN"} <i>•</i> {profile?.source==="forecast"?`F${String(profile.forecastHour).padStart(2,"0")}`:"RAOB"}</b></div><div className="plot-tools"><button disabled={model==="OBS"} onClick={()=>setCompare(value=>!value)} className={compare&&model!=="OBS"?"selected compare":""}>⇄ <span>COMPARE</span></button><button onClick={()=>setParcel(!parcel)} className={parcel?"selected":""}>◒ <span>PARCEL</span></button><button onClick={()=>setLayers(!layers)}>▤ <span>PANEL</span></button><button aria-label="Share sounding">↗</button></div></div>
+        <div className="legend"><span className="red"/> Temperature <span className="green"/> Dew point {parcel&&<><span className="yellow"/> Parcel</>} {model!=="OBS"&&compare&&comparison&&<b className="compare-key">DASHED · +3H</b>}</div>
+        <div className="chart"><SoundingChart hour={time} parcel={parcel} levels={profile?.levels} comparison={model!=="OBS"&&compare?comparison?.levels:undefined}/><div className="cape-label">CAPE<br/><b>{display(profile?.indices.sbcapeJkg)}</b></div>{model!=="OBS"&&compare&&comparison&&<div className="compare-card"><span>+3H COMPARISON</span><b>{new Date(comparison.validTimeIso).getUTCHours().toString().padStart(2,"0")}Z</b><div><small>CAPE</small><strong>{display(comparison.indices.sbcapeJkg)}</strong><em>{display(comparison.indices.sbcapeJkg-(profile?.indices.sbcapeJkg??0))}</em></div><div><small>SHEAR</small><strong>{display(comparison.indices.shear06Kt)} kt</strong><em>{display(comparison.indices.shear06Kt-(profile?.indices.shear06Kt??0))}</em></div><div><small>STP</small><strong>{display(comparison.indices.fixedStp,1)}</strong><em>{display(comparison.indices.fixedStp-(profile?.indices.fixedStp??0),1)}</em></div></div>}<div id="profile-summary" className="sr-only">{profile?`${profile.model} sounding with ${profile.levels.length} levels. Surface CAPE ${display(profile.indices.sbcapeJkg)} joules per kilogram, zero to six kilometer shear ${display(profile.indices.shear06Kt)} knots, LCL ${display(profile.indices.lclM)} meters above ground, storm relative helicity ${display(profile.indices.srh01M2s2)} square meters per square second.`:"Sounding profile loading."}</div></div>
       </section>
 
       <aside className="hodo glass">
@@ -157,9 +160,9 @@ export default function Home() {
       </aside>
     </section>
 
-    <section className="timeline glass"><button className="play" onClick={()=>{setDataState("loading");setTime((time+1)%7)}}>▶</button><div className="time-track">{times.map((t,i)=><button key={t} onClick={()=>{setDataState("loading");setTime(i)}} className={time===i?"active":""}><span>{profile?`${String((new Date(profile.validTimeIso).getUTCHours()-time+i+24)%24).padStart(2,"0")}Z`:"—"}</span><b>{t}</b></button>)}</div><div className="valid"><span>VALID</span><b>{validLabel.toUpperCase()}</b></div></section>
+    <section className="timeline glass"><button className="play" disabled={model==="OBS"} onClick={()=>{setDataState("loading");setTime((time+1)%7)}}>▶</button><div className="time-track">{times.map((t,i)=><button key={t} disabled={model==="OBS"&&i>0} onClick={()=>{setDataState("loading");setTime(i)}} className={time===i?"active":""}><span>{profile?`${String((new Date(profile.validTimeIso).getUTCHours()-time+i+24)%24).padStart(2,"0")}Z`:"—"}</span><b>{model==="OBS"&&i>0?"—":t}</b></button>)}</div><div className="valid"><span>VALID</span><b>{validLabel.toUpperCase()}</b></div></section>
     <nav className="mobile-nav"><button className="active">⌁<span>Sounding</span></button><button onClick={()=>setMapOpen(true)}>◉<span>Map</span></button><button onClick={()=>setPlacesOpen(true)}>◇<span>Favorites</span></button><button onClick={()=>setFieldMode(value=>!value)}>⚙<span>Field mode</span></button></nav>
-    {mapOpen&&<div className="map-modal" role="dialog" aria-modal="true" aria-label="Location map"><div className="map-sheet glass"><div className="map-title"><div><small>SOUNDING LOCATION</small><b>{placeLabel(place)}</b></div><div><button onClick={()=>navigator.geolocation?.getCurrentPosition(position=>choosePlace({name:"Current location",latitude:position.coords.latitude,longitude:position.coords.longitude}))}>⌖ USE MY LOCATION</button><button aria-label="Close map" onClick={()=>setMapOpen(false)}>×</button></div></div><MapPicker place={place} onSelect={choosePlace}/><div className="map-footer"><span>Tap anywhere to sample the nearest HRRR grid point.</span><button onClick={()=>setMapOpen(false)}>USE THIS LOCATION</button></div></div></div>}
-    {placesOpen&&<div className="map-modal" role="dialog" aria-modal="true" aria-label="Saved locations"><div className="places-sheet glass"><div className="map-title"><div><small>PLACES</small><b>Saved & recent</b></div><button aria-label="Close saved locations" onClick={()=>setPlacesOpen(false)}>×</button></div><section><h2>Favorites</h2>{favorites.length?favorites.map(item=><button key={`${item.latitude}-${item.longitude}`} onClick={()=>{choosePlace(item);setPlacesOpen(false)}}><span>★</span><b>{placeLabel(item)}</b><small>{item.latitude.toFixed(2)} · {item.longitude.toFixed(2)}</small></button>):<p>Star a sounding to keep it here.</p>}</section><section><h2>Recent</h2>{recents.map(item=><button key={`${item.latitude}-${item.longitude}`} onClick={()=>{choosePlace(item);setPlacesOpen(false)}}><span>⌖</span><b>{placeLabel(item)}</b><small>{item.latitude.toFixed(2)} · {item.longitude.toFixed(2)}</small></button>)}</section></div></div>}
+    {mapOpen&&<div className="map-modal" role="dialog" aria-modal="true" aria-label="Location map" tabIndex={-1}><div className="map-sheet glass"><div className="map-title"><div><small>SOUNDING LOCATION</small><b>{placeLabel(place)}</b></div><div><button onClick={()=>navigator.geolocation?.getCurrentPosition(position=>choosePlace({name:"Current location",latitude:position.coords.latitude,longitude:position.coords.longitude}))}>⌖ USE MY LOCATION</button><button aria-label="Close map" onClick={()=>setMapOpen(false)}>×</button></div></div><MapPicker place={place} onSelect={choosePlace}/><div className="map-footer"><span>Tap anywhere to sample the nearest HRRR grid point.</span><button onClick={()=>setMapOpen(false)}>USE THIS LOCATION</button></div></div></div>}
+    {placesOpen&&<div className="map-modal" role="dialog" aria-modal="true" aria-label="Saved locations" tabIndex={-1}><div className="places-sheet glass"><div className="map-title"><div><small>PLACES</small><b>Saved & recent</b></div><button aria-label="Close saved locations" onClick={()=>setPlacesOpen(false)}>×</button></div><section><h2>Favorites</h2>{favorites.length?favorites.map(item=><button key={`${item.latitude}-${item.longitude}`} onClick={()=>{choosePlace(item);setPlacesOpen(false)}}><span>★</span><b>{placeLabel(item)}</b><small>{item.latitude.toFixed(2)} · {item.longitude.toFixed(2)}</small></button>):<p>Star a sounding to keep it here.</p>}</section><section><h2>Recent</h2>{recents.map(item=><button key={`${item.latitude}-${item.longitude}`} onClick={()=>{choosePlace(item);setPlacesOpen(false)}}><span>⌖</span><b>{placeLabel(item)}</b><small>{item.latitude.toFixed(2)} · {item.longitude.toFixed(2)}</small></button>)}</section><button className="clear-data" onClick={()=>{clearSkewedStorage();setRecents([]);setFavorites([])}}>CLEAR SAVED LOCATIONS & OFFLINE DATA</button></div></div>}
   </main>
 }

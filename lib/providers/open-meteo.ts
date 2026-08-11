@@ -52,7 +52,7 @@ export const openMeteoHrrrProvider: SoundingProvider = {
       forecast_hours: "24",
       timezone: "GMT",
     });
-    const response = await fetch(`https://api.open-meteo.com/v1/gfs?${params}`);
+    const response = await fetch(`https://api.open-meteo.com/v1/gfs?${params}`, { signal: input.signal });
     if (!response.ok) throw new Error(`Forecast provider returned ${response.status}`);
     const payload = (await response.json()) as OpenMeteoResponse;
     const requested = new Date(input.validTimeIso).getTime();
