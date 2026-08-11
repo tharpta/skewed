@@ -8,6 +8,7 @@ import { MapPicker } from "./MapPicker";
 import { placeLabel, searchPlaces, type Place } from "../lib/locations";
 import { cacheProfile, cachedProfile, clearSkewedStorage } from "../lib/profile-cache";
 import { getObservedProfile } from "../lib/providers/observed";
+import { windBarbParts } from "../lib/wind-barb";
 
 const models = ["HRRR", "OBS"];
 const times = ["NOW", "+1H", "+2H", "+3H", "+4H", "+5H", "+6H"];
@@ -63,12 +64,13 @@ function SoundingChart({ hour, parcel, levels, comparison }: { hour: number; par
       const winds=liveLevels?.filter((_,i)=>i%3===0)??Array.from({length:14},(_,i)=>({windDirectionDeg:240,windSpeedKt:15+i*3,pressureHpa:1000-i*65}));
       winds.forEach((wind)=>{
         const y=top+Math.log(wind.pressureHpa/100)/Math.log(10)*(bottom-top), x=right-10;
-        const angle=(wind.windDirectionDeg-90)*Math.PI/180, length=24;
-        const tailX=x+Math.cos(angle)*length,tailY=y+Math.sin(angle)*length;
-        c.strokeStyle="#75c8ff";c.lineWidth=1.4;c.beginPath();c.moveTo(x,y);c.lineTo(tailX,tailY);
-        let remaining=Math.round(wind.windSpeedKt/5)*5,offset=0;
-        while(remaining>=10){const bx=tailX-Math.cos(angle)*offset,by=tailY-Math.sin(angle)*offset;c.moveTo(bx,by);c.lineTo(bx+Math.cos(angle-Math.PI/3)*8,by+Math.sin(angle-Math.PI/3)*8);remaining-=10;offset+=4}
-        if(remaining>=5){const bx=tailX-Math.cos(angle)*offset,by=tailY-Math.sin(angle)*offset;c.moveTo(bx,by);c.lineTo(bx+Math.cos(angle-Math.PI/3)*5,by+Math.sin(angle-Math.PI/3)*5)}c.stroke();
+        const parts=windBarbParts(wind.windSpeedKt);c.strokeStyle="#75c8ff";c.fillStyle="#75c8ff";c.lineWidth=1.4;
+        if(parts.calm){c.beginPath();c.arc(x,y,3.5,0,Math.PI*2);c.stroke();return}
+        const direction=wind.windDirectionDeg*Math.PI/180,length=26;
+        const shaftX=Math.sin(direction),shaftY=-Math.cos(direction),tailX=x+shaftX*length,tailY=y+shaftY*length;
+        const featherX=-shaftY,featherY=shaftX;c.beginPath();c.moveTo(x,y);c.lineTo(tailX,tailY);c.stroke();let offset=0;
+        for(let flag=0;flag<parts.pennants;flag++){const ax=tailX-shaftX*offset,ay=tailY-shaftY*offset,bx=tailX-shaftX*(offset+6),by=tailY-shaftY*(offset+6);c.beginPath();c.moveTo(ax,ay);c.lineTo(ax+featherX*9,ay+featherY*9);c.lineTo(bx,by);c.closePath();c.fill();offset+=7}
+        c.beginPath();for(let barb=0;barb<parts.fullBarbs;barb++){const bx=tailX-shaftX*offset,by=tailY-shaftY*offset;c.moveTo(bx,by);c.lineTo(bx+featherX*9,by+featherY*9);offset+=4.5}if(parts.halfBarbs){const bx=tailX-shaftX*offset,by=tailY-shaftY*offset;c.moveTo(bx,by);c.lineTo(bx+featherX*5,by+featherY*5)}c.stroke();
       });
     };
     draw(); const obs=new ResizeObserver(draw); obs.observe(canvas); return()=>obs.disconnect();
@@ -87,7 +89,8 @@ export default function Home() {
   const [parcel,setParcel]=useState(true); const [location,setLocation]=useState("Wichita, KS");
   const [layers,setLayers]=useState(true);
   const [place,setPlace]=useState<Place>({name:"Wichita",admin:"Kansas",latitude:37.687,longitude:-97.330});
-  const [mapOpen,setMapOpen]=useState(false); const [suggestions,setSuggestions]=useState<Place[]>([]);
+  const [mapOpen,setMapOpen]=useState(false); const [suggestions,setSuggestions]=useState<Place[]>([]); const [searchOpen,setSearchOpen]=useState(false);
+  const locationPickerRef=useRef<HTMLDivElement>(null);
   const [placesOpen,setPlacesOpen]=useState(false);
   const [recents,setRecents]=useState<Place[]>([]);
   const [favorites,setFavorites]=useState<Place[]>([]);
@@ -97,10 +100,11 @@ export default function Home() {
   const [online,setOnline]=useState(true);
   const [fieldMode,setFieldMode]=useState(false); const [preferencesLoaded,setPreferencesLoaded]=useState(false);
   const favorite=favorites.some(item=>Math.abs(item.latitude-place.latitude)<.001&&Math.abs(item.longitude-place.longitude)<.001);
+  useEffect(()=>{const dismiss=(event:PointerEvent)=>{if(!locationPickerRef.current?.contains(event.target as Node))setSearchOpen(false)};document.addEventListener("pointerdown",dismiss);return()=>document.removeEventListener("pointerdown",dismiss)},[]);
   useEffect(()=>{const id=setTimeout(()=>{setRecents(storedPlaces("skewed:recents"));setFavorites(storedPlaces("skewed:favorites"));setFieldMode(localStorage.getItem("skewed:field-mode")==="true");setPreferencesLoaded(true)},0);return()=>clearTimeout(id)},[]);
   const searchSequence=useRef(0);
   useEffect(()=>{const sequence=++searchSequence.current;const id=setTimeout(()=>searchPlaces(location).then(results=>{if(sequence===searchSequence.current)setSuggestions(results)}).catch(()=>{if(sequence===searchSequence.current)setSuggestions([])}),350);return()=>clearTimeout(id)},[location]);
-  const choosePlace=useCallback((next:Place)=>{setDataState("loading");setPlace(next);setLocation(placeLabel(next));setSuggestions([]);setRecents(previous=>{const updated=[next,...previous.filter(item=>Math.abs(item.latitude-next.latitude)>.001||Math.abs(item.longitude-next.longitude)>.001)].slice(0,5);localStorage.setItem("skewed:recents",JSON.stringify(updated));return updated})},[]);
+  const choosePlace=useCallback((next:Place)=>{setDataState("loading");setPlace(next);setLocation(placeLabel(next));setSuggestions([]);setSearchOpen(false);setRecents(previous=>{const updated=[next,...previous.filter(item=>Math.abs(item.latitude-next.latitude)>.001||Math.abs(item.longitude-next.longitude)>.001)].slice(0,5);localStorage.setItem("skewed:recents",JSON.stringify(updated));return updated})},[]);
   const toggleFavorite=()=>{setFavorites(previous=>{const exists=previous.some(item=>Math.abs(item.latitude-place.latitude)<.001&&Math.abs(item.longitude-place.longitude)<.001);const updated=exists?previous.filter(item=>Math.abs(item.latitude-place.latitude)>.001||Math.abs(item.longitude-place.longitude)>.001):[place,...previous];localStorage.setItem("skewed:favorites",JSON.stringify(updated));return updated})};
   useEffect(()=>{const connected=()=>setOnline(true),disconnected=()=>setOnline(false);window.addEventListener("online",connected);window.addEventListener("offline",disconnected);return()=>{window.removeEventListener("online",connected);window.removeEventListener("offline",disconnected)}},[]);
   const focusReturn=useRef<HTMLElement|null>(null);
@@ -127,7 +131,7 @@ export default function Home() {
     </header>
 
     <section className="toolbar glass">
-      <div className="location"><span>⌖</span><input aria-label="Location search" value={location} onChange={e=>setLocation(e.target.value)} onFocus={()=>setSuggestions(recents)}/><small>{Math.abs(place.latitude).toFixed(3)}° {place.latitude>=0?"N":"S"} · {Math.abs(place.longitude).toFixed(3)}° {place.longitude>=0?"E":"W"}</small>{suggestions.length>0&&<div className="suggestions">{suggestions.map((item,index)=><button key={`${item.latitude}-${item.longitude}-${index}`} onClick={()=>choosePlace(item)}><b>{item.name}</b><span>{[item.admin,item.country].filter(Boolean).join(" · ")}</span></button>)}</div>}</div>
+      <div className="location" ref={locationPickerRef}><span>⌖</span><input aria-label="Location search" role="combobox" aria-expanded={searchOpen&&suggestions.length>0} aria-controls="location-suggestions" value={location} onChange={e=>{setLocation(e.target.value);setSearchOpen(true)}} onFocus={()=>{setSuggestions(recents);setSearchOpen(true)}} onKeyDown={event=>{if(event.key==="Escape"){setSearchOpen(false);event.currentTarget.blur()}}}/><small>{Math.abs(place.latitude).toFixed(3)}° {place.latitude>=0?"N":"S"} · {Math.abs(place.longitude).toFixed(3)}° {place.longitude>=0?"E":"W"}</small>{searchOpen&&suggestions.length>0&&<div className="suggestions" id="location-suggestions" role="listbox">{suggestions.map((item,index)=><button role="option" aria-selected="false" key={`${item.latitude}-${item.longitude}-${index}`} onClick={()=>choosePlace(item)}><b>{item.name}</b><span>{[item.admin,item.country].filter(Boolean).join(" · ")}</span></button>)}</div>}</div>
       <div className="divider"/>
       <div className="model"><span className="model-label">MODEL</span><div className="segmented">{models.map(m=><button className={model===m?"active":""} onClick={()=>{setDataState("loading");setModel(m);if(m==="OBS"){setTime(0);setCompare(false);setComparison(undefined)}}} key={m}>{m}</button>)}</div></div>
       <button className="map-button" onClick={()=>setMapOpen(true)}>◉ <span>MAP</span></button><button className="refresh" onClick={()=>{setDataState("loading");setTime(0);setRefreshKey(key=>key+1)}}>↻ <span>UPDATE</span></button>

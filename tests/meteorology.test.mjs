@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { calculateLcl, deriveSoundingIndices, surfaceParcelProfile } from "../lib/meteorology.ts";
+import { windBarbParts } from "../lib/wind-barb.ts";
 
 const levels = [
   [960, 400, 29, 19], [900, 950, 23, 15], [800, 1900, 15, 7],
@@ -22,4 +23,12 @@ test("uniform wind produces zero shear, SRH, and STP",()=>{
   assert.equal(indices.shear01Kt,0); assert.equal(indices.shear06Kt,0);
   assert.equal(indices.srh01M2s2,0); assert.equal(indices.srh03M2s2,0);
   assert.equal(indices.fixedStp,0);
+});
+
+test("wind barbs use standard 50, 10, and 5 knot components",()=>{
+  assert.deepEqual(windBarbParts(2),{pennants:0,fullBarbs:0,halfBarbs:0,calm:true});
+  assert.deepEqual(windBarbParts(5),{pennants:0,fullBarbs:0,halfBarbs:1,calm:false});
+  assert.deepEqual(windBarbParts(25),{pennants:0,fullBarbs:2,halfBarbs:1,calm:false});
+  assert.deepEqual(windBarbParts(75),{pennants:1,fullBarbs:2,halfBarbs:1,calm:false});
+  assert.deepEqual(windBarbParts(105),{pennants:2,fullBarbs:0,halfBarbs:1,calm:false});
 });
