@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Updraft — Atmospheric Intelligence",
+  title: "Skewed — Atmospheric Intelligence",
   description: "A modern, field-ready Skew-T and severe weather analysis workspace.",
   icons: {
     icon: "/favicon.svg",

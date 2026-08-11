@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { openMeteoHrrrProvider } from "../lib/providers/open-meteo";
+import type { SoundingLevel, SoundingProfile } from "../lib/sounding";
 
-const models = ["HRRR", "RAP", "NAM 3K"];
+const models = ["HRRR"];
 const times = ["NOW", "+1H", "+2H", "+3H", "+4H", "+5H", "+6H"];
 
-function SoundingChart({ hour, parcel }: { hour: number; parcel: boolean }) {
+function SoundingChart({ hour, parcel, levels }: { hour: number; parcel: boolean; levels?: SoundingLevel[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -36,19 +38,26 @@ function SoundingChart({ hour, parcel }: { hour: number; parcel: boolean }) {
         c.beginPath(); c.setLineDash(dash); pts.forEach(([x,y],i)=>{ const px=left+x*(right-left), py=top+y*(bottom-top); i?c.lineTo(px,py):c.moveTo(px,py)});
         c.strokeStyle=color; c.lineWidth=width; c.lineJoin="round"; c.lineCap="round"; c.shadowColor=color; c.shadowBlur=width>2?9:0; c.stroke(); c.shadowBlur=0; c.setLineDash([]);
       };
-      const temp=[[.76,1],[.69,.91],[.66,.82],[.61,.72],[.62,.64],[.55,.55],[.50,.45],[.43,.34],[.40,.24],[.34,.13],[.29,0]];
-      const dew=[[.58,1],[.56,.91],[.52,.82],[.49,.72],[.43,.64],[.41,.55],[.36,.45],[.30,.34],[.29,.24],[.23,.13],[.20,0]];
+      const profilePoint=(temperatureC:number,pressureHpa:number)=>{
+        const y=Math.log(pressureHpa/100)/Math.log(10);
+        const x=(temperatureC+60)/110-(1-y)*.12;
+        return [Math.max(-.05,Math.min(1.05,x)),y];
+      };
+      const liveLevels=levels?.filter(level=>level.pressureHpa>=100&&level.pressureHpa<=1000);
+      const temp=liveLevels?.map(level=>profilePoint(level.temperatureC,level.pressureHpa))??[[.76,1],[.69,.91],[.66,.82],[.61,.72],[.62,.64],[.55,.55],[.50,.45],[.43,.34],[.40,.24],[.34,.13],[.29,0]];
+      const dew=liveLevels?.map(level=>profilePoint(level.dewpointC,level.pressureHpa))??[[.58,1],[.56,.91],[.52,.82],[.49,.72],[.43,.64],[.41,.55],[.36,.45],[.30,.34],[.29,.24],[.23,.13],[.20,0]];
       line(temp.map(([x,y])=>[x+(hour*.004*Math.sin(y*18)),y]),"#ff6b6f",3.2);
       line(dew,"#50e3a4",3.2);
       if(parcel) line([[.77,1],[.73,.87],[.69,.72],[.62,.58],[.54,.43],[.46,.29],[.39,.15],[.34,0]],"#ffd45e",2,[7,6]);
       c.shadowBlur=0;
-      for(let i=0;i<14;i++){
-        const y=top+20+i*(bottom-top-25)/13, x=right-8-(i%3)*5;
+      const winds=liveLevels?.filter((_,i)=>i%3===0)??Array.from({length:14},(_,i)=>({windDirectionDeg:240,windSpeedKt:15+i*3,pressureHpa:1000-i*65}));
+      winds.forEach((wind)=>{
+        const y=top+Math.log(wind.pressureHpa/100)/Math.log(10)*(bottom-top), x=right-10;
         c.strokeStyle="#75c8ff"; c.lineWidth=1.5; c.beginPath(); c.moveTo(x-13,y); c.lineTo(x+8,y); c.lineTo(x+3,y-4); c.moveTo(x+8,y); c.lineTo(x+3,y+4); c.stroke();
-      }
+      });
     };
     draw(); const obs=new ResizeObserver(draw); obs.observe(canvas); return()=>obs.disconnect();
-  },[hour,parcel]);
+  },[hour,parcel,levels]);
   return <canvas ref={ref} aria-label="Skew-T log-P sounding chart" />;
 }
 
@@ -56,10 +65,20 @@ export default function Home() {
   const [model,setModel]=useState("HRRR"); const [time,setTime]=useState(2);
   const [parcel,setParcel]=useState(true); const [location,setLocation]=useState("Wichita, KS");
   const [layers,setLayers]=useState(true); const [favorite,setFavorite]=useState(false);
+  const [profile,setProfile]=useState<SoundingProfile>(); const [dataState,setDataState]=useState<"loading"|"live"|"error">("loading");
+  useEffect(()=>{
+    let current=true; setDataState("loading");
+    const valid=new Date(); valid.setUTCMinutes(0,0,0); valid.setUTCHours(valid.getUTCHours()+time);
+    openMeteoHrrrProvider.getProfile({latitude:37.687,longitude:-97.330,validTimeIso:valid.toISOString(),model})
+      .then(next=>{if(current){setProfile(next);setDataState("live")}})
+      .catch(()=>{if(current)setDataState("error")});
+    return()=>{current=false};
+  },[time,model]);
+  const display=(value:number|undefined,digits=0)=>Number.isFinite(value)?Number(value).toFixed(digits):"—";
   return <main>
     <header>
-      <div className="brand"><span className="brandmark">U</span><div><b>UPDRAFT</b><small>ATMOSPHERIC INTELLIGENCE</small></div></div>
-      <div className="header-actions"><button className="live"><i/> LIVE DATA</button><button className="icon" aria-label="Settings">⌘</button><button className="avatar">TT</button></div>
+      <div className="brand"><span className="brandmark">S</span><div><b>SKEWED</b><small>ATMOSPHERIC INTELLIGENCE</small></div></div>
+      <div className="header-actions"><button className="live"><i className={dataState}/>{dataState==="live"?" LIVE HRRR":dataState==="loading"?" LOADING":" DATA ERROR"}</button><button className="icon" aria-label="Settings">⌘</button><button className="avatar">TT</button></div>
     </header>
 
     <section className="toolbar glass">
@@ -72,27 +91,27 @@ export default function Home() {
     <section className="workspace">
       <aside className={`summary glass ${layers?"":"collapsed"}`}>
         <div className="eyebrow"><span>FORECAST SOUNDING</span><button onClick={()=>setFavorite(!favorite)} aria-label="Favorite">{favorite?"★":"☆"}</button></div>
-        <h1>{location || "Wichita, KS"}</h1><p>Valid 21:00 UTC · Aug 10, 2026</p>
+        <h1>{location || "Wichita, KS"}</h1><p>{profile?`Valid ${new Date(profile.validTimeIso).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",timeZone:"UTC",timeZoneName:"short"})}`:"Loading forecast profile…"}</p>
         <div className="risk"><div><span className="pulse"/><b>SEVERE POTENTIAL</b></div><strong>Elevated</strong><p>Conditional supercell environment after 23Z</p></div>
         <div className="metrics">
-          <article><label>SBCAPE</label><strong>{2140+time*86}</strong><small>J/kg</small><em>↑ {time*3+8}%</em></article>
-          <article><label>0–6 KM SHEAR</label><strong>{44+time}</strong><small>kt</small><em>SUPERCELL</em></article>
-          <article><label>LCL HEIGHT</label><strong>{980-time*18}</strong><small>m AGL</small><em className="neutral">FAVORABLE</em></article>
-          <article><label>STP (FIXED)</label><strong>{(1.6+time*.16).toFixed(1)}</strong><small>index</small><em>↑ TRENDING</em></article>
+          <article><label>SBCAPE</label><strong>{display(profile?.indices.sbcapeJkg)}</strong><small>J/kg</small><em>LIVE MODEL</em></article>
+          <article><label>0–6 KM SHEAR</label><strong>{display(profile?.indices.shear06Kt)}</strong><small>kt</small><em>DERIVED</em></article>
+          <article><label>LCL HEIGHT</label><strong>{display(profile?.indices.lclM)}</strong><small>m AGL</small><em className="neutral">ESTIMATED</em></article>
+          <article><label>STP (FIXED)</label><strong>{display(profile?.indices.fixedStp,1)}</strong><small>index</small><em>COMING NEXT</em></article>
         </div>
-        <div className="analysis"><span>AI FIELD NOTE</span><p>Strongly curved low-level hodograph with increasing instability. Watch the dryline bulge west of ICT.</p></div>
+        <div className="analysis"><span>DATA PROVENANCE</span><p>{profile?`${profile.provider}. ${profile.levels.length} pressure levels loaded. Shear and LCL are derived in Skewed.`:"Connecting to the latest available HRRR profile…"}</p></div>
       </aside>
 
       <section className="plot glass">
         <div className="plot-head"><div><span>SKEW-T · LOG-P</span><b>{model} 18Z RUN <i>•</i> F0{time+2}</b></div><div className="plot-tools"><button onClick={()=>setParcel(!parcel)} className={parcel?"selected":""}>◒ <span>PARCEL</span></button><button onClick={()=>setLayers(!layers)}>▤ <span>PANEL</span></button><button>↗</button></div></div>
         <div className="legend"><span className="red"/> Temperature <span className="green"/> Dew point {parcel&&<><span className="yellow"/> Parcel</>}</div>
-        <div className="chart"><SoundingChart hour={time} parcel={parcel}/><div className="cape-label">CAPE<br/><b>{2140+time*86}</b></div></div>
+        <div className="chart"><SoundingChart hour={time} parcel={parcel} levels={profile?.levels}/><div className="cape-label">CAPE<br/><b>{display(profile?.indices.sbcapeJkg)}</b></div></div>
       </section>
 
       <aside className="hodo glass">
         <div className="hodo-head"><span>HODOGRAPH</span><b>0–6 KM</b></div>
         <div className="hodo-plot"><div className="rings"/><div className="hodo-line"/><span className="motion">RM</span><small>15</small><small>30</small><small>45</small></div>
-        <div className="hodo-stats"><div><span>SRH 0–1 KM</span><b>186 <small>m²/s²</small></b></div><div><span>SRH 0–3 KM</span><b>284 <small>m²/s²</small></b></div><div><span>STORM MOTION</span><b>228° <small>28 kt</small></b></div></div>
+        <div className="hodo-stats"><div><span>SRH 0–1 KM</span><b>— <small>m²/s²</small></b></div><div><span>SRH 0–3 KM</span><b>— <small>m²/s²</small></b></div><div><span>0–1 KM SHEAR</span><b>{display(profile?.indices.shear01Kt)} <small>kt</small></b></div></div>
       </aside>
     </section>
 
