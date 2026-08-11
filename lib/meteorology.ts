@@ -83,11 +83,13 @@ export function surfaceParcelProfile(levels: SoundingLevel[]) {
     });
     previousPressure = level.pressureHpa;
   }
-  let capeJkg = 0; let cinJkg = 0;
+  let capeJkg = 0; let cinJkg = 0; let positiveParcel = false; let equilibriumReached = false;
   for (let index = 1; index < points.length; index++) {
     const lower = points[index - 1], upper = points[index];
     const energy = ((lower.buoyancyMs2 + upper.buoyancyMs2) / 2) * Math.max(0, upper.heightM - lower.heightM);
-    if (energy > 0) capeJkg += energy; else cinJkg += energy;
+    if (energy > 0 && !equilibriumReached) { positiveParcel = true; capeJkg += energy; }
+    else if (energy <= 0 && !positiveParcel) cinJkg += energy;
+    else if (energy <= 0 && positiveParcel) equilibriumReached = true;
   }
   const lclM = surface.heightM + (RD * initialTemperatureK / G) * Math.log(surface.pressureHpa / lcl.pressureHpa);
   return { points, capeJkg, cinJkg, lclM: lclM - surface.heightM };
@@ -98,7 +100,8 @@ function interpolateWind(levels: SoundingLevel[], heightAglM: number) {
   const target = surfaceHeight + heightAglM;
   const ordered = [...levels].sort((a,b)=>a.heightM-b.heightM);
   const upperIndex = ordered.findIndex((level)=>level.heightM>=target);
-  if (upperIndex <= 0) return windComponents(ordered[0].windDirectionDeg, ordered[0].windSpeedKt);
+  if (upperIndex < 0) return windComponents(ordered.at(-1)!.windDirectionDeg, ordered.at(-1)!.windSpeedKt);
+  if (upperIndex === 0) return windComponents(ordered[0].windDirectionDeg, ordered[0].windSpeedKt);
   const lower = ordered[upperIndex-1], upper = ordered[upperIndex];
   const fraction = (target-lower.heightM)/(upper.heightM-lower.heightM);
   const a=windComponents(lower.windDirectionDeg,lower.windSpeedKt), b=windComponents(upper.windDirectionDeg,upper.windSpeedKt);
@@ -125,7 +128,7 @@ export function stormRelativeHelicity(levels: SoundingLevel[], depthM: 1000|3000
 }
 
 export function deriveSoundingIndices(levels: SoundingLevel[], providerCape?: number, providerCin?: number): SoundingIndices {
-  const parcel=surfaceParcelProfile(levels); const surface=levels[0];
+  const parcel=surfaceParcelProfile(levels);
   const wind0=interpolateWind(levels,0),wind1=interpolateWind(levels,1000),wind6=interpolateWind(levels,6000);
   const shear01Kt=Math.hypot(wind1.uKt-wind0.uKt,wind1.vKt-wind0.vKt);
   const shear06Kt=Math.hypot(wind6.uKt-wind0.uKt,wind6.vKt-wind0.vKt);

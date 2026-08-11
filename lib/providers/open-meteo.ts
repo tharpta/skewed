@@ -44,7 +44,8 @@ export const openMeteoHrrrProvider: SoundingProvider = {
       longitude: String(input.longitude),
       models: "ncep_hrrr_conus",
       hourly: [
-        "temperature_2m", "dew_point_2m", "cape", "convective_inhibition",
+        "temperature_2m", "dew_point_2m", "wind_speed_10m", "wind_direction_10m",
+        "surface_pressure", "cape", "convective_inhibition",
         ...pressureVariables,
       ].join(","),
       wind_speed_unit: "kn",
@@ -63,7 +64,7 @@ export const openMeteoHrrrProvider: SoundingProvider = {
           : closest,
       0,
     );
-    const levels = PRESSURE_LEVELS.map((pressure): SoundingLevel | null => {
+    const pressureLevels = PRESSURE_LEVELS.map((pressure): SoundingLevel | null => {
       const level = {
         pressureHpa: pressure,
         heightM: value(payload.hourly, `geopotential_height_${pressure}hPa`, index),
@@ -74,7 +75,18 @@ export const openMeteoHrrrProvider: SoundingProvider = {
       };
       return Object.values(level).every(Number.isFinite) ? level : null;
     }).filter((level): level is SoundingLevel => level !== null);
-    if (levels.length < 5) throw new Error("Forecast profile is incomplete");
+    const surface: SoundingLevel = {
+      pressureHpa: value(payload.hourly, "surface_pressure", index),
+      heightM: payload.elevation,
+      temperatureC: value(payload.hourly, "temperature_2m", index),
+      dewpointC: value(payload.hourly, "dew_point_2m", index),
+      windDirectionDeg: value(payload.hourly, "wind_direction_10m", index),
+      windSpeedKt: value(payload.hourly, "wind_speed_10m", index),
+    };
+    const levels = [surface, ...pressureLevels.filter(level =>
+      level.heightM > payload.elevation + 25 && level.pressureHpa < surface.pressureHpa,
+    )];
+    if (levels.length < 5 || !Object.values(surface).every(Number.isFinite)) throw new Error("Forecast profile is incomplete");
     const validTimeIso = `${payload.hourly.time[index]}:00Z`;
     const indices = deriveSoundingIndices(
       levels,
