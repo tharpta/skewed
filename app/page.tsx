@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { openMeteoHrrrProvider } from "../lib/providers/open-meteo";
 import type { SoundingLevel, SoundingProfile } from "../lib/sounding";
 import { bunkersRightMover, surfaceParcelProfile } from "../lib/meteorology";
@@ -16,6 +17,7 @@ function storedPlaces(key:string):Place[]{if(typeof localStorage==="undefined")r
 
 function SoundingChart({ hour, parcel, levels, comparison }: { hour: number; parcel: boolean; levels?: SoundingLevel[]; comparison?: SoundingLevel[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const [inspection,setInspection]=useState<{trace:string;color:string,valueC:number,level:SoundingLevel,x:number,y:number}|null>(null);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -75,7 +77,22 @@ function SoundingChart({ hour, parcel, levels, comparison }: { hour: number; par
     };
     draw(); const obs=new ResizeObserver(draw); obs.observe(canvas); return()=>obs.disconnect();
   },[hour,parcel,levels,comparison]);
-  return <canvas ref={ref} aria-label="Skew-T log-P sounding chart" aria-describedby="profile-summary" />;
+  const inspect=(event:ReactPointerEvent<HTMLCanvasElement>)=>{
+    if(!levels?.length)return;
+    const rect=event.currentTarget.getBoundingClientRect(),left=46,right=rect.width-22,top=24,bottom=rect.height-38;
+    const pointerX=event.clientX-rect.left,pointerY=event.clientY-rect.top;
+    const profilePoint=(temperatureC:number,pressureHpa:number)=>{const y=Math.log(pressureHpa/100)/Math.log(10);const x=(temperatureC+60)/110-(1-y)*.12;return{x:left+Math.max(-.05,Math.min(1.05,x))*(right-left),y:top+y*(bottom-top)}};
+    const candidates:{trace:string;color:string,valueC:number,level:SoundingLevel,x:number,y:number}[]=[];
+    levels.filter(level=>level.pressureHpa>=100&&level.pressureHpa<=1000).forEach(level=>{
+      const temperature=profilePoint(level.temperatureC,level.pressureHpa),dewpoint=profilePoint(level.dewpointC,level.pressureHpa);
+      temperature.x+=(hour*.004*Math.sin(Math.log(level.pressureHpa/100)/Math.log(10)*18))*(right-left);
+      candidates.push({trace:"Temperature",color:"#ff6b6f",valueC:level.temperatureC,level,x:temperature.x,y:temperature.y},{trace:"Dew point",color:"#50e3a4",valueC:level.dewpointC,level,x:dewpoint.x,y:dewpoint.y});
+    });
+    if(parcel){const byPressure=new Map(levels.map(level=>[level.pressureHpa,level]));surfaceParcelProfile(levels).points.forEach(point=>{const level=byPressure.get(point.pressureHpa);if(level){const position=profilePoint(point.temperatureC,point.pressureHpa);candidates.push({trace:"Parcel",color:"#ffd45e",valueC:point.temperatureC,level,x:position.x,y:position.y})}})}
+    const nearest=candidates.reduce<{item:typeof candidates[number],distance:number}|null>((best,item)=>{const distance=Math.hypot(item.x-pointerX,item.y-pointerY);return !best||distance<best.distance?{item,distance}:best},null);
+    setInspection(nearest&&nearest.distance<=30?nearest.item:null);
+  };
+  return <div className="sounding-interactive" onPointerLeave={()=>setInspection(null)}><canvas ref={ref} aria-label="Interactive Skew-T log-P sounding chart. Touch or point at a trace to inspect its value." aria-describedby="profile-summary" onPointerDown={inspect} onPointerMove={inspect}/>{inspection&&<><i className="sounding-marker" style={{left:inspection.x,top:inspection.y,borderColor:inspection.color,boxShadow:`0 0 12px ${inspection.color}`}}/><div className="sounding-readout" style={{left:inspection.x,top:inspection.y,borderColor:inspection.color}} role="status"><b style={{color:inspection.color}}>{inspection.trace}</b><strong>{inspection.valueC.toFixed(1)}°C</strong><span>{Math.round(inspection.level.pressureHpa)} hPa · {Math.round(inspection.level.heightM)} m</span></div></>}</div>;
 }
 
 function Hodograph({levels}:{levels?:SoundingLevel[]}){
