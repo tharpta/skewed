@@ -17,7 +17,7 @@ function storedPlaces(key:string):Place[]{if(typeof localStorage==="undefined")r
 
 function SoundingChart({ hour, parcel, levels, comparison }: { hour: number; parcel: boolean; levels?: SoundingLevel[]; comparison?: SoundingLevel[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const [inspection,setInspection]=useState<{trace:string;color:string,valueC:number,level:SoundingLevel,x:number,y:number}|null>(null);
+  const [inspection,setInspection]=useState<{trace:string;color:string,valueC?:number,windSpeedKt?:number,windDirectionDeg?:number,level:SoundingLevel,x:number,y:number}|null>(null);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -82,17 +82,19 @@ function SoundingChart({ hour, parcel, levels, comparison }: { hour: number; par
     const rect=event.currentTarget.getBoundingClientRect(),left=46,right=rect.width-22,top=24,bottom=rect.height-38;
     const pointerX=event.clientX-rect.left,pointerY=event.clientY-rect.top;
     const profilePoint=(temperatureC:number,pressureHpa:number)=>{const y=Math.log(pressureHpa/100)/Math.log(10);const x=(temperatureC+60)/110-(1-y)*.12;return{x:left+Math.max(-.05,Math.min(1.05,x))*(right-left),y:top+y*(bottom-top)}};
-    const candidates:{trace:string;color:string,valueC:number,level:SoundingLevel,x:number,y:number}[]=[];
-    levels.filter(level=>level.pressureHpa>=100&&level.pressureHpa<=1000).forEach(level=>{
+    const liveLevels=levels.filter(level=>level.pressureHpa>=100&&level.pressureHpa<=1000);
+    const candidates:{trace:string;color:string,valueC?:number,windSpeedKt?:number,windDirectionDeg?:number,level:SoundingLevel,x:number,y:number,distance?:number}[]=[];
+    liveLevels.forEach(level=>{
       const temperature=profilePoint(level.temperatureC,level.pressureHpa),dewpoint=profilePoint(level.dewpointC,level.pressureHpa);
       temperature.x+=(hour*.004*Math.sin(Math.log(level.pressureHpa/100)/Math.log(10)*18))*(right-left);
       candidates.push({trace:"Temperature",color:"#ff6b6f",valueC:level.temperatureC,level,x:temperature.x,y:temperature.y},{trace:"Dew point",color:"#50e3a4",valueC:level.dewpointC,level,x:dewpoint.x,y:dewpoint.y});
     });
     if(parcel){const byPressure=new Map(levels.map(level=>[level.pressureHpa,level]));surfaceParcelProfile(levels).points.forEach(point=>{const level=byPressure.get(point.pressureHpa);if(level){const position=profilePoint(point.temperatureC,point.pressureHpa);candidates.push({trace:"Parcel",color:"#ffd45e",valueC:point.temperatureC,level,x:position.x,y:position.y})}})}
-    const nearest=candidates.reduce<{item:typeof candidates[number],distance:number}|null>((best,item)=>{const distance=Math.hypot(item.x-pointerX,item.y-pointerY);return !best||distance<best.distance?{item,distance}:best},null);
+    liveLevels.filter((_,index)=>index%3===0).forEach(level=>{const x=right-10,y=top+Math.log(level.pressureHpa/100)/Math.log(10)*(bottom-top),direction=level.windDirectionDeg*Math.PI/180,tailX=x+Math.sin(direction)*26,tailY=y-Math.cos(direction)*26,dx=tailX-x,dy=tailY-y,lengthSquared=dx*dx+dy*dy,t=windBarbParts(level.windSpeedKt).calm?0:Math.max(0,Math.min(1,((pointerX-x)*dx+(pointerY-y)*dy)/lengthSquared)),hitX=x+t*dx,hitY=y+t*dy;candidates.push({trace:"Wind",color:"#75c8ff",windSpeedKt:level.windSpeedKt,windDirectionDeg:level.windDirectionDeg,level,x:hitX,y:hitY,distance:Math.hypot(hitX-pointerX,hitY-pointerY)})});
+    const nearest=candidates.reduce<{item:typeof candidates[number],distance:number}|null>((best,item)=>{const distance=item.distance??Math.hypot(item.x-pointerX,item.y-pointerY);return !best||distance<best.distance?{item,distance}:best},null);
     setInspection(nearest&&nearest.distance<=30?nearest.item:null);
   };
-  return <div className="sounding-interactive" onPointerLeave={()=>setInspection(null)}><canvas ref={ref} aria-label="Interactive Skew-T log-P sounding chart. Touch or point at a trace to inspect its value." aria-describedby="profile-summary" onPointerDown={inspect} onPointerMove={inspect}/>{inspection&&<><i className="sounding-marker" style={{left:inspection.x,top:inspection.y,borderColor:inspection.color,boxShadow:`0 0 12px ${inspection.color}`}}/><div className="sounding-readout" style={{left:inspection.x,top:inspection.y,borderColor:inspection.color}} role="status"><b style={{color:inspection.color}}>{inspection.trace}</b><strong>{inspection.valueC.toFixed(1)}°C</strong><span>{Math.round(inspection.level.pressureHpa)} hPa · {Math.round(inspection.level.heightM)} m</span></div></>}</div>;
+  return <div className="sounding-interactive" onPointerLeave={()=>setInspection(null)}><canvas ref={ref} aria-label="Interactive Skew-T log-P sounding chart. Touch or point at a trace or wind barb to inspect its value." aria-describedby="profile-summary" onPointerDown={inspect} onPointerMove={inspect}/>{inspection&&<><i className="sounding-marker" style={{left:inspection.x,top:inspection.y,borderColor:inspection.color,boxShadow:`0 0 12px ${inspection.color}`}}/><div className="sounding-readout" style={{left:inspection.x,top:inspection.y,borderColor:inspection.color}} role="status"><b style={{color:inspection.color}}>{inspection.trace}</b><strong>{inspection.windSpeedKt!==undefined?`${inspection.windSpeedKt.toFixed(0)} kt`: `${inspection.valueC?.toFixed(1)}°C`}</strong><span>{inspection.windDirectionDeg!==undefined&&`${Math.round(inspection.windDirectionDeg)}° · `}{Math.round(inspection.level.pressureHpa)} hPa · {Math.round(inspection.level.heightM)} m</span></div></>}</div>;
 }
 
 function Hodograph({levels}:{levels?:SoundingLevel[]}){
