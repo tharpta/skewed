@@ -1,38 +1,22 @@
 import { deriveSoundingIndices } from "../meteorology";
-import type { SoundingLevel, SoundingProfile } from "../sounding";
+import { windComponents, type SoundingLevel, type SoundingProfile } from "../sounding";
 
-const stations = [
-  ["KDDC","Dodge City, KS",37.76,-99.97], ["KOUN","Norman, OK",35.18,-97.44],
-  ["KTOP","Topeka, KS",39.07,-95.63], ["KAMA","Amarillo, TX",35.23,-101.71],
-  ["KLBF","North Platte, NE",41.13,-100.70], ["KSGF","Springfield, MO",37.24,-93.40],
-  ["KOAX","Omaha, NE",41.32,-96.37], ["KABR","Aberdeen, SD",45.46,-98.41],
-] as const;
-
+type Station = { id:string; name:string; latitude:number; longitude:number };
+type NetworkFeature = { id:string; properties:{sname?:string;online?:boolean;country?:string}; geometry:{coordinates:[number,number]} };
 const radians=(degrees:number)=>degrees*Math.PI/180;
-function distanceKm(aLat:number,aLon:number,bLat:number,bLon:number){const dLat=radians(bLat-aLat),dLon=radians(bLon-aLon);const value=Math.sin(dLat/2)**2+Math.cos(radians(aLat))*Math.cos(radians(bLat))*Math.sin(dLon/2)**2;return 6371*2*Math.atan2(Math.sqrt(value),Math.sqrt(1-value))}
+export function distanceKm(aLat:number,aLon:number,bLat:number,bLon:number){const dLat=radians(bLat-aLat),dLon=radians(bLon-aLon),value=Math.sin(dLat/2)**2+Math.cos(radians(aLat))*Math.cos(radians(bLat))*Math.sin(dLon/2)**2;return 6371*2*Math.atan2(Math.sqrt(value),Math.sqrt(1-value))}
 
-export function nearestObservedStation(latitude:number,longitude:number){return [...stations].sort((a,b)=>distanceKm(latitude,longitude,a[2],a[3])-distanceKm(latitude,longitude,b[2],b[3]))[0]}
-
-export async function getObservedProfile(latitude:number,longitude:number,signal?:AbortSignal):Promise<SoundingProfile>{
-  const candidates=[...stations].sort((a,b)=>distanceKm(latitude,longitude,a[2],a[3])-distanceKm(latitude,longitude,b[2],b[3]));
-  let lastError:unknown;
-  for(const station of candidates.slice(0,4)){try{return await fetchStationProfile(station,signal)}catch(error){if(signal?.aborted)throw error;lastError=error}}
-  throw lastError instanceof Error?lastError:new Error("No recent observed sounding nearby");
+let stationPromise:Promise<Station[]>|undefined;
+async function observedStations(){
+  stationPromise??=fetch("https://mesonet.agron.iastate.edu/geojson/network.php?network=RAOB").then(async response=>{if(!response.ok)throw new Error(`Station catalog returned ${response.status}`);const payload=await response.json() as {features:NetworkFeature[]},byId=new Map(payload.features.map(feature=>[feature.id,feature]));return payload.features.filter(feature=>feature.properties.online&&feature.properties.country==="US"&&!feature.id.startsWith("_")&&feature.geometry?.coordinates?.every(Number.isFinite)).map(feature=>{const area=byId.get(`_${feature.id.slice(1)}`),location=area?.geometry?.coordinates?.every(Number.isFinite)?area:feature;return {id:feature.id,name:location.properties.sname||feature.properties.sname||feature.id,latitude:location.geometry.coordinates[1],longitude:location.geometry.coordinates[0]}})}).catch(error=>{stationPromise=undefined;throw error});
+  return stationPromise;
 }
+export async function nearestObservedStation(latitude:number,longitude:number){const stations=await observedStations();return [...stations].sort((a,b)=>distanceKm(latitude,longitude,a.latitude,a.longitude)-distanceKm(latitude,longitude,b.latitude,b.longitude))[0]}
 
-async function fetchStationProfile(station:typeof stations[number],signal?:AbortSignal):Promise<SoundingProfile>{
-  const end=new Date(),start=new Date(end.getTime()-42*3_600_000);
-  const params=new URLSearchParams({sts:start.toISOString(),ets:end.toISOString(),station:station[0],format:"comma"});
-  const response=await fetch(`https://mesonet.agron.iastate.edu/cgi-bin/request/raob.py?${params}`,{signal});
-  if(!response.ok)throw new Error(`Observed provider returned ${response.status}`);
-  const lines=(await response.text()).trim().split("\n");if(lines.length<3)throw new Error("No recent observed sounding");
-  const rows=lines.slice(1).map(line=>line.split(","));const latest=rows.map(row=>row[1]).sort().at(-1)!;
-  const levels=rows.filter(row=>row[1]===latest).map((row):SoundingLevel|null=>{
-    const values=row.slice(3,9).map(value=>value==="M"?Number.NaN:Number(value));
-    if(!values.every(Number.isFinite))return null;
-    return {pressureHpa:values[0],heightM:values[1],temperatureC:values[2],dewpointC:values[3],windDirectionDeg:values[4],windSpeedKt:values[5]};
-  }).filter((level):level is SoundingLevel=>level!==null).sort((a,b)=>b.pressureHpa-a.pressureHpa);
-  if(levels.length<8)throw new Error("Observed sounding is incomplete");
-  const validTimeIso=`${latest.replace(" ","T")}Z`;
-  return {id:`obs-${station[0]}-${validTimeIso}`,source:"observed",provider:`NWS RAOB via Iowa Environmental Mesonet · ${station[0]}`,model:"OBS",runTimeIso:validTimeIso,validTimeIso,forecastHour:0,location:{name:station[1],latitude:station[2],longitude:station[3],elevationM:levels[0].heightM},levels,indices:deriveSoundingIndices(levels)};
-}
+type ParsedRow={pressureHpa:number;heightM:number;temperatureC:number;dewpointC:number;windDirectionDeg:number;windSpeedKt:number};
+const number=(value:string)=>value==="M"?Number.NaN:Number(value);
+function windAtHeight(winds:ParsedRow[],heightM:number){const ordered=[...winds].sort((a,b)=>a.heightM-b.heightM);if(!ordered.length)return;const upperIndex=ordered.findIndex(level=>level.heightM>=heightM);if(upperIndex<=0){const level=upperIndex===0?ordered[0]:ordered.at(-1)!;return {direction:level.windDirectionDeg,speed:level.windSpeedKt}}const lower=ordered[upperIndex-1],upper=ordered[upperIndex],fraction=(heightM-lower.heightM)/(upper.heightM-lower.heightM||1),a=windComponents(lower.windDirectionDeg,lower.windSpeedKt),b=windComponents(upper.windDirectionDeg,upper.windSpeedKt),u=a.uKt+(b.uKt-a.uKt)*fraction,v=a.vKt+(b.vKt-a.vKt)*fraction;return {direction:(Math.atan2(-u,-v)*180/Math.PI+360)%360,speed:Math.hypot(u,v)}}
+export function parseObservedRows(rows:string[][]):SoundingLevel[]{const parsed=rows.map(row=>{const values=row.slice(3,9).map(number);return {pressureHpa:values[0],heightM:values[1],temperatureC:values[2],dewpointC:values[3],windDirectionDeg:values[4],windSpeedKt:values[5]}}),winds=parsed.filter(level=>Number.isFinite(level.heightM)&&Number.isFinite(level.windDirectionDeg)&&Number.isFinite(level.windSpeedKt));return parsed.filter(level=>Number.isFinite(level.pressureHpa)&&Number.isFinite(level.heightM)&&Number.isFinite(level.temperatureC)&&Number.isFinite(level.dewpointC)).map(level=>{const wind=Number.isFinite(level.windDirectionDeg)&&Number.isFinite(level.windSpeedKt)?{direction:level.windDirectionDeg,speed:level.windSpeedKt}:windAtHeight(winds,level.heightM);return wind?{pressureHpa:level.pressureHpa,heightM:level.heightM,temperatureC:level.temperatureC,dewpointC:Math.min(level.dewpointC,level.temperatureC),windDirectionDeg:wind.direction,windSpeedKt:wind.speed}:null}).filter((level):level is SoundingLevel=>level!==null).sort((a,b)=>b.pressureHpa-a.pressureHpa)}
+
+export async function getObservedProfile(latitude:number,longitude:number,signal?:AbortSignal):Promise<SoundingProfile>{const stations=await observedStations(),candidates=[...stations].sort((a,b)=>distanceKm(latitude,longitude,a.latitude,a.longitude)-distanceKm(latitude,longitude,b.latitude,b.longitude));let lastError:unknown;for(const station of candidates.slice(0,8)){try{return await fetchStationProfile(station,latitude,longitude,signal)}catch(error){if(signal?.aborted)throw error;lastError=error}}throw lastError instanceof Error?lastError:new Error("No recent observed sounding nearby")}
+async function fetchStationProfile(station:Station,latitude:number,longitude:number,signal?:AbortSignal):Promise<SoundingProfile>{const end=new Date(),start=new Date(end.getTime()-42*3_600_000),params=new URLSearchParams({sts:start.toISOString(),ets:end.toISOString(),station:station.id,format:"comma"}),response=await fetch(`https://mesonet.agron.iastate.edu/cgi-bin/request/raob.py?${params}`,{signal});if(!response.ok)throw new Error(`Observed provider returned ${response.status}`);const lines=(await response.text()).trim().split("\n");if(lines.length<3)throw new Error("No recent observed sounding");const rows=lines.slice(1).map(line=>line.split(",")),latest=rows.map(row=>row[1]).sort().at(-1)!,levels=parseObservedRows(rows.filter(row=>row[1]===latest));if(levels.length<8)throw new Error("Observed sounding is incomplete");const validTimeIso=`${latest.replace(" ","T")}Z`,stationDistanceKm=distanceKm(latitude,longitude,station.latitude,station.longitude);return {id:`obs-${station.id}-${validTimeIso}`,source:"observed",provider:"NWS RAOB via Iowa Environmental Mesonet",model:"OBS",runTimeIso:validTimeIso,validTimeIso,forecastHour:0,location:{name:station.name,latitude:station.latitude,longitude:station.longitude,elevationM:levels[0].heightM},observation:{stationId:station.id,stationName:station.name,distanceKm:stationDistanceKm},levels,indices:deriveSoundingIndices(levels)}}

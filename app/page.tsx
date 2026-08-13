@@ -160,14 +160,15 @@ export default function Home() {
       <aside className={`summary glass ${layers?"":"collapsed"}`}>
         <div className="eyebrow"><span>{profile?.source==="observed"?"OBSERVED SOUNDING":"FORECAST SOUNDING"}</span><button onClick={toggleFavorite} aria-label="Favorite">{favorite?"★":"☆"}</button></div>
         <h1>{location || "Wichita, KS"}</h1><p>Valid {validLabel}</p>
+        {profile?.observation&&<div className="obs-source"><b>{profile.observation.stationId} · {profile.observation.stationName}</b><span>{Math.round(profile.observation.distanceKm)} km from selected point · launched {validLabel}</span></div>}
         <div className="risk"><div><span className="pulse"/><b>COMPOSITE ENVIRONMENT</b></div><strong>{riskLabel}</strong><p>Objective category from the current parcel, shear, SRH, and LCL profile.</p></div>
         <div className="metrics">
-          <article><span className="metric-label">SBCAPE</span><strong>{display(profile?.indices.sbcapeJkg)}</strong><small>J/kg</small><em>LIVE MODEL</em></article>
+          <article><span className="metric-label">SBCAPE</span><strong>{display(profile?.indices.sbcapeJkg)}</strong><small>J/kg</small><em>{profile?.source==="observed"?"SURFACE PARCEL · DERIVED":"LIVE MODEL"}</em></article>
           <article><span className="metric-label">0–6 KM SHEAR</span><strong>{display(profile?.indices.shear06Kt)}</strong><small>kt</small><em>DERIVED</em></article>
           <article><span className="metric-label">LCL HEIGHT</span><strong>{display(profile?.indices.lclM)}</strong><small>m AGL</small><em className="neutral">DERIVED</em></article>
           <article><span className="metric-label">STP (FIXED)</span><strong>{display(profile?.indices.fixedStp,1)}</strong><small>index</small><em>DERIVED</em></article>
         </div>
-        <div className="analysis"><span>DATA PROVENANCE</span><p>{profile?`${profile.provider}. ${profile.levels.length} pressure levels loaded. Shear and LCL are derived in Skewed.`:"Connecting to the latest available HRRR profile…"}</p></div>
+        <div className="analysis"><span>DATA PROVENANCE</span><p>{profile?`${profile.provider}. ${profile.levels.length} thermodynamic levels loaded${profile.source==="observed"?"; missing winds interpolated by height":""}. SBCAPE, shear, and LCL are derived in Skewed.`:"Connecting to the latest available HRRR profile…"}</p></div>
       </aside>
 
       <section className="plot glass">

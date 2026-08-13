@@ -35,6 +35,7 @@ export interface SoundingProfile {
     longitude: number;
     elevationM: number;
   };
+  observation?: { stationId: string; stationName: string; distanceKm: number };
   levels: SoundingLevel[];
   indices: SoundingIndices;
 }
