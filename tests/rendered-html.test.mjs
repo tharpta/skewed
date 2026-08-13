@@ -31,6 +31,7 @@ test("keeps live data and meteorology behind explicit modules", async () => {
   assert.match(provider, /ncep_hrrr_conus/);
   assert.match(provider, /surface_pressure/);
   assert.match(provider, /level\.heightM > payload\.elevation/);
+  assert.doesNotMatch(provider, /name: "Wichita, KS"/);
   assert.match(meteorology, /surfaceParcelProfile/);
   assert.match(meteorology, /stormRelativeHelicity/);
   assert.match(page, /MapPicker/);

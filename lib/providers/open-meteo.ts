@@ -102,7 +102,7 @@ export const openMeteoHrrrProvider: SoundingProvider = {
       validTimeIso,
       forecastHour: Math.max(0, Math.round((new Date(validTimeIso).getTime() - Date.now()) / 3_600_000)),
       location: {
-        name: "Wichita, KS",
+        name: `${payload.latitude.toFixed(3)}°, ${payload.longitude.toFixed(3)}°`,
         latitude: payload.latitude,
         longitude: payload.longitude,
         elevationM: payload.elevation,
